@@ -38,8 +38,11 @@ from unitree_hg.msg import (
     MotorCmd,
 )
 from .crc import CRC
+from .base_env import BaseEnv
 
-class UnitreeEnv(Node):
+class UnitreeEnv(BaseEnv, Node):
+    simulated = False
+
     def __init__(self, control_freq: int = 100, 
                  joint_order: list[str] | None = None,
                  action_joint_names: list[str] | None = None,
@@ -63,6 +66,16 @@ class UnitreeEnv(Node):
             init_rclpy: Whether to initialize rclpy
             spin_timeout: Timeout for rclpy.spin_once
         """
+        BaseEnv.__init__(self, control_freq=control_freq,
+                         joint_order=joint_order,
+                         action_joint_names=action_joint_names,
+                         release_time_delta=release_time_delta,
+                         align_time=align_time,
+                         align_step_size=align_step_size,
+                         align_tolerance=align_tolerance,
+                         init_rclpy=init_rclpy,
+                         spin_timeout=spin_timeout,
+                         **kwargs) # check kwargs
         self.control_freq = control_freq
         self.control_dt = 1.0 / self.control_freq
         self.release_time_delta = release_time_delta
@@ -91,7 +104,7 @@ class UnitreeEnv(Node):
         # Initiate ROS2 node
         if init_rclpy:
             rclpy.init()
-        super().__init__('unitree_env')
+        Node.__init__(self, 'unitree_env')
 
         # Create a subscriber to listen to an input topic (such as 'input_topic')
         self.lowstate_sub = self.create_subscription(
@@ -187,6 +200,7 @@ class UnitreeEnv(Node):
         # Refresh data by spinning once
         rclpy.spin_once(self, timeout_sec=self.spin_timeout)
     
+    @BaseEnv.data_interface
     def get_joint_data(self):
         """
         Get current joint data
@@ -201,6 +215,7 @@ class UnitreeEnv(Node):
             'joint_cmd': self.target_positions.clone(),  # Joint commands
         }
     
+    @BaseEnv.data_interface
     def get_root_data(self):
         """
         Get current root data
@@ -211,6 +226,7 @@ class UnitreeEnv(Node):
             'root_ang_vel': self.root_ang_vel.clone(),  # Root angular velocity
         }
     
+    @BaseEnv.data_interface
     def get_body_data(self):
         """
         Get current body data

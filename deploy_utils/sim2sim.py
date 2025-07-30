@@ -28,8 +28,11 @@ from .math_utils import (
     euler_xyz_from_quat,
     quat_apply_inverse,
 )
+from .base_env import BaseEnv
 
-class MujocoEnv:
+class MujocoEnv(BaseEnv):
+    simulated = True
+
     def __init__(self, control_freq: int = 100, 
                  joint_order: list[str] | None = None,
                  action_joint_names: list[str] | None = None,
@@ -39,7 +42,10 @@ class MujocoEnv:
                  joint_damping: float = 0.1, 
                  enable_viewer: bool = True,
                  enable_ros_control: bool = False,
+                 release_time_delta: float = 0.0,
                  align_time: bool = True,
+                 align_step_size: float = 0.00005,
+                 align_tolerance: float = 2.0,
                  **kwargs):
         """
         Initialize MuJoCo environment
@@ -56,6 +62,20 @@ class MujocoEnv:
             enable_ros_control: Whether to enable ROS control
             align_time: Whether to align the simulation time with the real time
         """
+        super().__init__(control_freq=control_freq,
+                         joint_order=joint_order,
+                         action_joint_names=action_joint_names,
+                         model_path=model_path,
+                         simulation_freq=simulation_freq,
+                         joint_armature=joint_armature,
+                         joint_damping=joint_damping,
+                         enable_viewer=enable_viewer,
+                         enable_ros_control=enable_ros_control,
+                         release_time_delta=release_time_delta,
+                         align_time=align_time,
+                         align_step_size=align_step_size,
+                         align_tolerance=align_tolerance,
+                         **kwargs) # check kwargs
         self.model_path = model_path
         self.control_freq = control_freq
         self.simulation_freq = simulation_freq
@@ -63,7 +83,10 @@ class MujocoEnv:
         self.joint_damping = joint_damping
         self.enable_viewer = enable_viewer
         self.enable_ros_control = enable_ros_control
+        self.release_time_delta = release_time_delta
         self.align_time = align_time
+        self.align_step_size = align_step_size
+        self.align_tolerance = align_tolerance
 
         # Validate control frequency
         if control_freq > simulation_freq:
@@ -206,6 +229,7 @@ class MujocoEnv:
         # refresh data is no-ops for sim2sim
         pass
     
+    @BaseEnv.data_interface
     def get_joint_data(self):
         """
         Get current joint data
@@ -219,6 +243,7 @@ class MujocoEnv:
             'joint_cmd': torch.from_numpy(self.target_positions.copy()[self.joint_order]).float(),  # Joint commands
         }
     
+    @BaseEnv.data_interface
     def get_root_data(self):
         """
         Get current root data, including root orientation, and relative angular velocity.
@@ -234,6 +259,7 @@ class MujocoEnv:
             'root_ang_vel': root_ang_vel,  # Root angular velocity
         }
     
+    @BaseEnv.data_interface
     def get_body_data(self):
         """
         Get current body data
@@ -425,17 +451,25 @@ class MujocoEnv:
         # Update step count
         self.step_count += 1
 
-        # Real-time synchronization
-        if self.align_time:
-            elapsed = time.time() - start_time
-            if elapsed < control_period:
-                time.sleep(control_period - elapsed)
-
         # Compute step frequency
         self.step_times.append(time.monotonic() - self.last_step_time)
         self.last_step_time = time.monotonic()
         if len(self.step_times) > self.max_record_steps:
             self.step_times.pop(0)
+
+        # Align simulation time
+        if self.align_time:
+            frequency = self.step_frequency
+            if frequency > self.control_freq + self.align_tolerance:
+                self.release_time_delta = self.release_time_delta - self.align_step_size
+            elif frequency < self.control_freq - self.align_tolerance:
+                self.release_time_delta = self.release_time_delta + self.align_step_size
+            self.release_time_delta = max(self.release_time_delta, 0.0)
+            self.release_time_delta = min(self.release_time_delta, control_period)
+
+            elapsed = time.time() - start_time
+            if elapsed < control_period - self.release_time_delta:
+                time.sleep(control_period - self.release_time_delta - elapsed)
         return True
     
     def _set_random_targets(self, range_min=-0.2, range_max=0.2):
