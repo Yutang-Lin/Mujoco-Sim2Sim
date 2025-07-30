@@ -7,6 +7,7 @@ Format your server as following to get seamlessly transfer from sim2sim to sim2r
 ```python
 """import packages"""
 from deploy_utils.sim2sim import MujocoEnv
+# from deploy_utils.sim2real import UnitreeEnv # for sim2real
 from deploy_utils.utils import reindex # reindex if needed
 
 """define joint order if needed"""
