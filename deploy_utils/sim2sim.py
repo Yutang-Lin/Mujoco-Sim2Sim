@@ -174,13 +174,27 @@ class MujocoEnv:
         self.step_count = 0
         
         print(f"Robot reset! Root {'fixed (floating)' if fix_root else 'free'}")
+
+    def refresh_data(self):
+        """Refresh data"""
+        # refresh data is no-ops for sim2sim
+        pass
     
     def get_joint_data(self):
         """
         Get current joint data
         
         Returns:
-            dict: Dictionary containing joint positions, velocities, and accelerations
+            dict: Dictionary containing joint positions, velocities.
+        """
+        return {
+            'joint_pos': torch.from_numpy(self.data.qpos[7:].copy()[self._joint_order]).float(),  # Joint positions (excluding root)
+            'joint_vel': torch.from_numpy(self.data.qvel[6:].copy()[self._joint_order]).float(),  # Joint velocities (excluding root)
+        }
+    
+    def get_root_data(self):
+        """
+        Get current root data, including root orientation, and relative angular velocity.
         """
         root_quat = torch.from_numpy(self.data.qpos[3:7].copy()).float()
         root_ang_vel = torch.from_numpy(self.data.qvel[3:6].copy()).float()
@@ -188,9 +202,7 @@ class MujocoEnv:
         root_rpy = torch.stack(euler_xyz_from_quat(root_quat.view(1, 4)), dim=-1).view(-1)
 
         return {
-            'joint_pos': torch.from_numpy(self.data.qpos[7:].copy()[self._joint_order]).float(),  # Joint positions (excluding root)
-            'joint_vel': torch.from_numpy(self.data.qvel[6:].copy()[self._joint_order]).float(),  # Joint velocities (excluding root)
-            'root_rpy': root_rpy,  # Root position (x, y, z)
+            'root_rpy': root_rpy,  # Root euler (x, y, z)
             'root_quat': root_quat,  # Root orientation (quaternion)
             'root_ang_vel': root_ang_vel,  # Root angular velocity
         }

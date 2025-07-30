@@ -28,6 +28,7 @@ class UnitreeEnv(Node):
                  action_joint_names: list[str] | None = None,
                  release_time_delta: float = 0.0,
                  init_rclpy: bool = True,
+                 spin_timeout: float = 0.001,
                  **kwargs):
         """
         Initialize MuJoCo environment
@@ -38,10 +39,12 @@ class UnitreeEnv(Node):
             action_joint_names: List of joint names that are actuated (subset of joint_order).
             release_time_delta: Delta time to step_complete return True before control dt reach
             init_rclpy: Whether to initialize rclpy
+            spin_timeout: Timeout for rclpy.spin_once
         """
         self.control_freq = control_freq
         self.control_dt = 1.0 / self.control_freq
         self.release_time_delta = release_time_delta
+        self.spin_timeout = spin_timeout
         
         # State variables
         self.step_count = 0
@@ -148,6 +151,11 @@ class UnitreeEnv(Node):
         """
         # no-ops in sim2real
         pass
+
+    def refresh_data(self):
+        """Refresh data"""
+        # Refresh data by spinning once
+        rclpy.spin_once(self, timeout_sec=self.spin_timeout)
     
     def get_joint_data(self):
         """
@@ -158,9 +166,16 @@ class UnitreeEnv(Node):
         """
 
         return {
-            'joint_pos': self.joint_pos.clone(),  # Joint positions (excluding root)
-            'joint_vel': self.joint_vel.clone(),  # Joint velocities (excluding root)
-            'root_rpy': self.root_rpy.clone(),  # Root position (x, y, z)
+            'joint_pos': self.joint_pos.clone(),  # Joint positions
+            'joint_vel': self.joint_vel.clone(),  # Joint velocities
+        }
+    
+    def get_root_data(self):
+        """
+        Get current root data
+        """
+        return {
+            'root_rpy': self.root_rpy.clone(),  # Root euler (x, y, z)
             'root_quat': self.root_quat.clone(),  # Root orientation (quaternion)
             'root_ang_vel': self.root_ang_vel.clone(),  # Root angular velocity
         }
@@ -263,7 +278,10 @@ class UnitreeEnv(Node):
 
     def step_complete(self):
         """Check if the simulation step is complete"""
-        return time.monotonic() - self.last_publish_time > self.control_dt - self.release_time_delta
+        step_complete = time.monotonic() - self.last_publish_time > self.control_dt - self.release_time_delta
+        if step_complete:
+            rclpy.spin_once(self, timeout_sec=self.spin_timeout)
+        return step_complete
     
     def step(self, actions=None):
         """
