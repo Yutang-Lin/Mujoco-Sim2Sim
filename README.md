@@ -15,7 +15,6 @@ policy_joint_order = [...]
 real_joint_order = [...]
 policy_to_real = reindex(policy_joint_order, real_joint_order)
 
-# from deploy_utils.sim2real import UnitreeEnv # for real deployment
 """initialize env, setup control hz etc."""
 env = MujocoEnv(
     control_fre =50,
