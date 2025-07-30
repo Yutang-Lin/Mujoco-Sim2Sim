@@ -1,0 +1,10 @@
+LICENSE
+README.md
+pyproject.toml
+lib/crc_aarch64.so
+lib/crc_amd64.so
+sim2sim.egg-info/PKG-INFO
+sim2sim.egg-info/SOURCES.txt
+sim2sim.egg-info/dependency_links.txt
+sim2sim.egg-info/requires.txt
+sim2sim.egg-info/top_level.txt
