@@ -2,6 +2,12 @@
 ## Introduction
 Simple implementation of Gym stype simulator environments for sim2sim. Along with a wrapped ROS2 environment for Unitree robots' real deployment with same interface as simulators, provide seamless transfer between sim2sim and sim2real.
 
+## Roadmap
+Here shows the roadmap of this repository.
+- [x] Implement Mujoco as basic sim2sim environment.
+- [x] Implement ROS2 environment for unitree sim2real.
+- [ ] Implement SAPIEN sim2sim environment for tasks need visual informations.
+
 ## Usage
 Format your server as following to get seamlessly transfer from sim2sim to sim2real, and wrapped ROS2 communication.
 ```python
