@@ -27,6 +27,7 @@ class UnitreeEnv(Node):
                  joint_order: list[str] | None = None,
                  action_joint_names: list[str] | None = None,
                  release_time_delta: float = 0.0,
+                 init_rclpy: bool = False,
                  **kwargs):
         """
         Initialize MuJoCo environment
@@ -36,6 +37,7 @@ class UnitreeEnv(Node):
             joint_order: List of joint names specifying the order of joints for control and observation.
             action_joint_names: List of joint names that are actuated (subset of joint_order).
             release_time_delta: Delta time to step_complete return True before control dt reach
+            init_rclpy: Whether to initialize rclpy
         """
         self.control_freq = control_freq
         self.control_dt = 1.0 / self.control_freq
@@ -59,6 +61,8 @@ class UnitreeEnv(Node):
         self.num_joints = len(joint_order)
 
         # Initiate ROS2 node
+        if init_rclpy:
+            rclpy.init()
         super().__init__('unitree_env')
 
         # Create a subscriber to listen to an input topic (such as 'input_topic')
