@@ -7,7 +7,7 @@ import sys
 import os
 import time
 from copy import deepcopy
-from math_utils import (
+from .math_utils import (
     euler_xyz_from_quat,
     quat_apply_inverse,
 )
@@ -78,6 +78,8 @@ class MujocoEnv:
         self.kd = np.full(self.num_joints, 0.0)   # Default velocity gain for all joints
 
         # Get joint names
+        self._joint_names = [self.model.joint(i).name for i in range(self.model.njnt)][1:]
+        # Get actuator names
         self.joint_names = [self.model.actuator(i).name for i in range(self.model.nu)]
         # Get body names
         self.body_names = [self.model.body(i).name for i in range(self.model.nbody)]
@@ -90,6 +92,13 @@ class MujocoEnv:
         else:
             for name in joint_order:
                 self.joint_order.append(self.joint_names.index(name))
+
+        self._joint_order = []
+        if joint_order is None or len(joint_order) == 0:
+            self._joint_order = [self.joint_names.index(name) for name in self._joint_names]
+        else:
+            for name in joint_order:
+                self._joint_order.append(self._joint_names.index(name))
 
         self.action_joint_names = action_joint_names
         self.action_joints = []
@@ -124,7 +133,16 @@ class MujocoEnv:
         dt = 1.0 / self.simulation_freq
         self.model.opt.timestep = dt
         print(f"Set simulation frequency to {self.simulation_freq} Hz (timestep: {dt:.6f} s)")
-    
+
+    def _update_model_actuator_gains(self):
+        """Update MuJoCo model actuator gains if using position actuators"""
+        # Check if any actuators are position actuators
+        for i in range(self.model.nu):
+            # Update the model's actuator gains
+            self.model.actuator_gainprm[i] = self.kp[i]  # kp
+            self.model.actuator_biasprm[i] = self.kd[i]  # kd
+        print(f"Updated model actuator gains: kp={self.kp}, kd={self.kd}")
+
     def reset(self, fix_root=False):
         """
         Reset the robot to initial state
@@ -167,11 +185,11 @@ class MujocoEnv:
         root_quat = torch.from_numpy(self.data.qpos[3:7].copy()).float()
         root_ang_vel = torch.from_numpy(self.data.qvel[3:6].copy()).float()
         root_ang_vel = quat_apply_inverse(root_quat, root_ang_vel)
-        root_rpy = torch.stack(euler_xyz_from_quat(root_quat), dim=-1).view(-1)
+        root_rpy = torch.stack(euler_xyz_from_quat(root_quat.view(1, 4)), dim=-1).view(-1)
 
         return {
-            'joint_pos': torch.from_numpy(self.data.qpos[7:].copy()[self.joint_order]).float(),  # Joint positions (excluding root)
-            'joint_vel': torch.from_numpy(self.data.qvel[6:].copy()[self.joint_order]).float(),  # Joint velocities (excluding root)
+            'joint_pos': torch.from_numpy(self.data.qpos[7:].copy()[self._joint_order]).float(),  # Joint positions (excluding root)
+            'joint_vel': torch.from_numpy(self.data.qvel[6:].copy()[self._joint_order]).float(),  # Joint velocities (excluding root)
             'root_rpy': root_rpy,  # Root position (x, y, z)
             'root_quat': root_quat,  # Root orientation (quaternion)
             'root_ang_vel': root_ang_vel,  # Root angular velocity
@@ -209,7 +227,7 @@ class MujocoEnv:
             'body_lin_vel': torch.from_numpy(np.array(body_velocities)).float(),
             'body_ang_vel': torch.from_numpy(np.array(body_angular_velocities)).float(),
         }
-    
+
     def set_pd_gains(self, kp=None, kd=None):
         """
         Set PD control gains
@@ -266,6 +284,9 @@ class MujocoEnv:
                 else:
                     raise ValueError(f"Expected kd array of length {self.num_joints}, got {len(kd)}")
         
+        # Update MuJoCo model actuator gains if using position actuators
+        self._update_model_actuator_gains()
+        
         print(f"Set PD gains:")
         print(f"  kp: {self.kp}")
         print(f"  kd: {self.kd}")
@@ -283,10 +304,27 @@ class MujocoEnv:
             return torch.from_numpy(self.kp[self.joint_order].copy()).float(), torch.from_numpy(self.kd[self.joint_order].copy()).float()
     
     def apply_pd_control(self):
-        """Apply PD control using current target positions"""
-        # For position actuators, we just set the target positions
-        # MuJoCo will automatically apply PD control
-        self.data.ctrl[:] = self.target_positions
+        """Apply PD control using current target positions and PD gains"""
+        # Get current joint positions and velocities (excluding root)
+        current_positions = self.data.qpos[7:].copy()[self._joint_order]  # Joint positions (excluding root)
+        current_velocities = self.data.qvel[6:].copy()[self._joint_order]  # Joint velocities (excluding root)
+        
+        # Get target positions for the joints we're controlling
+        target_positions = self.target_positions[self.joint_order]
+        
+        # Compute PD control torques: tau = kp * (target_pos - current_pos) + kd * (0 - current_vel)
+        position_errors = target_positions - current_positions
+        velocity_errors = 0.0 - current_velocities  # Target velocity is 0
+        
+        # Get PD gains for the joints we're controlling
+        kp_control = self.kp[self.joint_order]
+        kd_control = self.kd[self.joint_order]
+        
+        # Compute control torques
+        control_torques = kp_control * position_errors + kd_control * velocity_errors
+        
+        # Apply torques to the actuators
+        self.data.ctrl[self.joint_order] = control_torques
 
     def step_complete(self):
         """Check if the simulation step is complete"""

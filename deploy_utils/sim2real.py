@@ -7,7 +7,7 @@ import sys
 import os
 import time
 from copy import deepcopy
-from math_utils import (
+from .math_utils import (
     euler_xyz_from_quat,
     quat_apply_inverse,
 )
@@ -20,14 +20,14 @@ from unitree_hg.msg import (
     LowCmd,
     MotorCmd,
 )
-from crc import CRC
+from .crc import CRC
 
 class UnitreeEnv(Node):
     def __init__(self, control_freq: int = 100, 
                  joint_order: list[str] | None = None,
                  action_joint_names: list[str] | None = None,
                  release_time_delta: float = 0.0,
-                 init_rclpy: bool = False,
+                 init_rclpy: bool = True,
                  **kwargs):
         """
         Initialize MuJoCo environment
@@ -230,6 +230,10 @@ class UnitreeEnv(Node):
                     self.kd[self.action_joints] = kd.copy()
                 else:
                     raise ValueError(f"Expected kd array of length {self.num_joints}, got {len(kd)}")
+                
+        for i in range(self.num_joints):
+            self.motor_cmd[i].kp = float(self.kp[i])
+            self.motor_cmd[i].kd = float(self.kd[i])
         
         print(f"Set PD gains:")
         print(f"  kp: {self.kp}")
