@@ -185,6 +185,7 @@ class UnitreeEnv(Node):
         return {
             'joint_pos': self.joint_pos.clone(),  # Joint positions
             'joint_vel': self.joint_vel.clone(),  # Joint velocities
+            'joint_cmd': self.target_positions.clone(),  # Joint commands
         }
     
     def get_root_data(self):

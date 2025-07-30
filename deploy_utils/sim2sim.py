@@ -207,6 +207,7 @@ class MujocoEnv:
         return {
             'joint_pos': torch.from_numpy(self.data.qpos[7:].copy()[self._joint_order]).float(),  # Joint positions (excluding root)
             'joint_vel': torch.from_numpy(self.data.qvel[6:].copy()[self._joint_order]).float(),  # Joint velocities (excluding root)
+            'joint_cmd': torch.from_numpy(self.target_positions.copy()[self.joint_order]).float(),  # Joint commands
         }
     
     def get_root_data(self):

@@ -29,7 +29,7 @@ while not end_condition:
         time.sleep(0.001)
     env.refresh_data()
 
-    joint_data = env.get_joint_data() # dict of joint_pos, joint_vel
+    joint_data = env.get_joint_data() # dict of joint_pos, joint_vel, joint_cmd
     root_data = env.get_root_data() # dict of root_rpy, root_quat, root_ang_vel
     # body_data = env.get_body_data() # dict of body_pos ..., only in sim2sim
 
