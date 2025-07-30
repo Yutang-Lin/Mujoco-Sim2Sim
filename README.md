@@ -1,6 +1,6 @@
-# Mujoco-Sim2Sim
+# Sim-to-Everything
 ## Introduction
-Simple implementation of Gym stype Mujoco env for sim2sim. Along with a ROS2 env for Unitree robots' real deployment with same interface as Mujoco env.
+Simple implementation of Gym stype simulator environments for sim2sim. Along with a wrapped ROS2 environment for Unitree robots' real deployment with same interface as simulators, provide seamless transfer between sim2sim and sim2real.
 
 ## Usage
 Format your server as following to get seamlessly transfer from sim2sim to sim2real, and wrapped ROS2 communication.
