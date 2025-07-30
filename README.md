@@ -13,7 +13,7 @@ from deploy_utils.utils import reindex # reindex if needed
 """define joint order if needed"""
 policy_joint_order = [...]
 real_joint_order = [...]
-policy_to_real = reindex(policy_joint_order, real_joint_order)
+policy_to_real = reindex(policy_joint_order, real_joint_order) # reindex(from, to)
 
 """initialize env, setup control hz etc."""
 env = MujocoEnv(
