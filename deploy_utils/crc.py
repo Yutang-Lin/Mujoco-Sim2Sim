@@ -2,9 +2,6 @@ import struct
 import cyclonedds
 import cyclonedds.idl as idl
 
-# from unitree_go.msg import LowCmd as LowCmd_
-# from unitree_go.msg import LowState as LowState_
-
 from unitree_hg.msg import LowCmd as HGLowCmd_
 from unitree_hg.msg import LowState as HGLowState_
 import ctypes
