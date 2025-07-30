@@ -44,6 +44,9 @@ class UnitreeEnv(Node):
                  joint_order: list[str] | None = None,
                  action_joint_names: list[str] | None = None,
                  release_time_delta: float = 0.0,
+                 align_time: bool = True,
+                 align_step_size: float = 0.00005,
+                 align_tolerance: float = 2.0,
                  init_rclpy: bool = True,
                  spin_timeout: float = 0.001,
                  **kwargs):
@@ -55,12 +58,17 @@ class UnitreeEnv(Node):
             joint_order: List of joint names specifying the order of joints for control and observation.
             action_joint_names: List of joint names that are actuated (subset of joint_order).
             release_time_delta: Delta time to step_complete return True before control dt reach
+            align_time: Whether to adjust release_time_delta to align the control frequency with the real-time step frequency
+            align_step_size: Step size to auto-adjust the release_time_delta
             init_rclpy: Whether to initialize rclpy
             spin_timeout: Timeout for rclpy.spin_once
         """
         self.control_freq = control_freq
         self.control_dt = 1.0 / self.control_freq
         self.release_time_delta = release_time_delta
+        self.align_time = align_time
+        self.align_step_size = align_step_size
+        self.align_tolerance = align_tolerance
         self.spin_timeout = spin_timeout
         
         # State variables
@@ -125,6 +133,11 @@ class UnitreeEnv(Node):
 
         # Initialize CRC
         self.crc = CRC()
+
+        # Initialize step frequency computation
+        self.step_times = []
+        self.max_record_steps = 50
+        self.last_step_time = time.monotonic()
 
         # Get joint order
         self.joint_order_names = joint_order
@@ -294,6 +307,13 @@ class UnitreeEnv(Node):
         self.lowcmd.crc = self.crc.Crc(self.lowcmd) # type: ignore
         self.lowcmd_pub.publish(self.lowcmd)
 
+    @property
+    def step_frequency(self):
+        """Compute step frequency"""
+        if len(self.step_times) == 0:
+            return self.control_freq
+        return 1.0 / np.mean(self.step_times)
+
     def step_complete(self):
         """Check if the simulation step is complete"""
         step_complete = time.monotonic() - self.last_publish_time > self.control_dt - self.release_time_delta
@@ -321,11 +341,28 @@ class UnitreeEnv(Node):
             if len(actions) != len(self.action_joints):
                 raise ValueError(f"Expected actions array of length {len(self.action_joints)}, got {len(actions)}")
             self.target_positions[self.action_joints] = actions.clone().float()
+
+        # Update step count
+        self.step_count += 1
         
         # Apply PD control
         self.apply_pd_control()
         self.last_publish_time = time.monotonic()
 
+        # Compute step frequency
+        self.step_times.append(time.monotonic() - self.last_step_time)
+        self.last_step_time = time.monotonic()
+        if len(self.step_times) > self.max_record_steps:
+            self.step_times.pop(0)
+
+        if self.align_time:
+            frequency = self.step_frequency
+            if frequency > self.control_freq + self.align_tolerance:
+                self.release_time_delta -= self.align_step_size
+            elif frequency < self.control_freq - self.align_tolerance:
+                self.release_time_delta += self.align_step_size
+            self.release_time_delta = max(0.0, self.release_time_delta)
+            self.release_time_delta = min(self.control_dt, self.release_time_delta)
         return True
     
     def run_simulation(self, max_steps=None):

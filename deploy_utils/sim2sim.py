@@ -39,6 +39,7 @@ class MujocoEnv:
                  joint_damping: float = 0.1, 
                  enable_viewer: bool = True,
                  enable_ros_control: bool = False,
+                 align_time: bool = True,
                  **kwargs):
         """
         Initialize MuJoCo environment
@@ -52,6 +53,8 @@ class MujocoEnv:
             joint_armature: Joint armature (motor inertia) value
             joint_damping: Joint damping value
             enable_viewer: Whether to enable the MuJoCo viewer
+            enable_ros_control: Whether to enable ROS control
+            align_time: Whether to align the simulation time with the real time
         """
         self.model_path = model_path
         self.control_freq = control_freq
@@ -60,6 +63,7 @@ class MujocoEnv:
         self.joint_damping = joint_damping
         self.enable_viewer = enable_viewer
         self.enable_ros_control = enable_ros_control
+        self.align_time = align_time
 
         # Validate control frequency
         if control_freq > simulation_freq:
@@ -100,6 +104,11 @@ class MujocoEnv:
         self.joint_names = [self.model.actuator(i).name for i in range(self.model.nu)]
         # Get body names
         self.body_names = [self.model.body(i).name for i in range(self.model.nbody)]
+
+        # Initialize step frequency computation
+        self.step_times = []
+        self.max_record_steps = 50
+        self.last_step_time = time.monotonic()
 
         # Get joint order
         self.joint_order_names = joint_order
@@ -356,6 +365,13 @@ class MujocoEnv:
         # Apply torques to the actuators
         self.data.ctrl[self.joint_order] = control_torques
 
+    @property
+    def step_frequency(self):
+        """Compute step frequency"""
+        if len(self.step_times) == 0:
+            return 0.0
+        return 1.0 / np.mean(self.step_times)
+
     def step_complete(self):
         """Check if the simulation step is complete"""
         return True
@@ -406,11 +422,20 @@ class MujocoEnv:
             if self.viewer is not None and _ == self.decimation - 1:
                 self.viewer.sync()
             
-            self.step_count += 1
+        # Update step count
+        self.step_count += 1
+
         # Real-time synchronization
-        elapsed = time.time() - start_time
-        if elapsed < control_period:
-            time.sleep(control_period - elapsed)
+        if self.align_time:
+            elapsed = time.time() - start_time
+            if elapsed < control_period:
+                time.sleep(control_period - elapsed)
+
+        # Compute step frequency
+        self.step_times.append(time.monotonic() - self.last_step_time)
+        self.last_step_time = time.monotonic()
+        if len(self.step_times) > self.max_record_steps:
+            self.step_times.pop(0)
         return True
     
     def _set_random_targets(self, range_min=-0.2, range_max=0.2):
