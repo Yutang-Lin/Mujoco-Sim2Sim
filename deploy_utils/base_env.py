@@ -51,6 +51,15 @@ class BaseEnv:
             data = func(self, *args, **kwargs)
             data = self._data_interface(data)
             return data
+        def str(*args, **kwargs):
+            return f"WrappedInterface({func.__str__(*args, **kwargs)})"
+        def repr(*args, **kwargs):
+            return f"WrappedInterface({func.__repr__(*args, **kwargs)})"
+        def format(*args, **kwargs):    
+            return f"WrappedInterface({func.__format__(*args, **kwargs)})"
+        wrapper.__str__ = str
+        wrapper.__repr__ = repr
+        wrapper.__format__ = format
         return wrapper
 
     def reset(self, fix_root: bool = False) -> None:
