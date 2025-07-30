@@ -1,36 +1,49 @@
 import mujoco
 import mujoco.viewer
-import numpy as np
+import numpy as np  
+import torch
 import time
 import sys
 import os
 import time
+from copy import deepcopy
+from math_utils import (
+    euler_xyz_from_quat,
+    quat_apply_inverse,
+)
 
 class MujocoEnv:
-    def __init__(self, model_path: str, 
-                 simulation_freq: int = 1000, 
-                 control_freq: int = 100, 
+    def __init__(self, control_freq: int = 100, 
+                 joint_order: list[str] | None = None,
+                 action_joint_names: list[str] | None = None,
+                 model_path: str = '', 
+                 simulation_freq: int = 1000,
                  joint_armature: float = 0.01, 
                  joint_damping: float = 0.1, 
-                 enable_viewer: bool = True):
+                 enable_viewer: bool = True,
+                 enable_ros_control: bool = False,
+                 **kwargs):
         """
         Initialize MuJoCo environment
         
         Args:
+            control_freq: Control frequency in Hz (must be <= simulation_freq)
+            joint_order: List of joint names specifying the order of joints for control and observation.
+            action_joint_names: List of joint names that are actuated (subset of joint_order).
             model_path: Path to the MuJoCo XML model file
             simulation_freq: Simulation frequency in Hz
-            control_freq: Control frequency in Hz (must be <= simulation_freq)
             joint_armature: Joint armature (motor inertia) value
             joint_damping: Joint damping value
             enable_viewer: Whether to enable the MuJoCo viewer
         """
         self.model_path = model_path
-        self.simulation_freq = simulation_freq
         self.control_freq = control_freq
+        self.simulation_freq = simulation_freq
         self.joint_armature = joint_armature
         self.joint_damping = joint_damping
         self.enable_viewer = enable_viewer
-        
+        self.enable_ros_control = enable_ros_control
+
         # Validate control frequency
         if control_freq > simulation_freq:
             raise ValueError(f"Control frequency ({control_freq} Hz) cannot be higher than simulation frequency ({simulation_freq} Hz)")
@@ -57,16 +70,34 @@ class MujocoEnv:
         self.root_fixed = False
         
         # Initialize target positions (excluding root)
-        self.num_joints = self.model.nq - 7  # Total DOF minus root (7 DOF)
+        self.num_joints = self.model.nu  # Total actuators
         self.target_positions = np.zeros(self.num_joints)
         
         # PD gains (can be modified) - now per-joint arrays
-        self.kp = np.full(self.num_joints, 100.0)  # Default position gain for all joints
-        self.kd = np.full(self.num_joints, 10.0)   # Default velocity gain for all joints
+        self.kp = np.full(self.num_joints, 0.0)  # Default position gain for all joints
+        self.kd = np.full(self.num_joints, 0.0)   # Default velocity gain for all joints
 
         # Get joint names
-        # ignore floating base
         self.joint_names = [self.model.actuator(i).name for i in range(self.model.nu)]
+        # Get body names
+        self.body_names = [self.model.body(i).name for i in range(self.model.nbody)]
+
+        # Get joint order
+        self.joint_order_names = joint_order
+        self.joint_order = []
+        if joint_order is None or len(joint_order) == 0:
+            self.joint_order = list(range(self.num_joints))
+        else:
+            for name in joint_order:
+                self.joint_order.append(self.joint_names.index(name))
+
+        self.action_joint_names = action_joint_names
+        self.action_joints = []
+        if action_joint_names is None or len(action_joint_names) == 0:
+            self.action_joints = deepcopy(self.joint_order)
+        else:
+            for name in action_joint_names:
+                self.action_joints.append(self.joint_names.index(name))
         
         print(f"MuJoCo Environment initialized:")
         print(f"  Model: {model_path}")
@@ -133,18 +164,17 @@ class MujocoEnv:
         Returns:
             dict: Dictionary containing joint positions, velocities, and accelerations
         """
+        root_quat = torch.from_numpy(self.data.qpos[3:7].copy()).float()
+        root_ang_vel = torch.from_numpy(self.data.qvel[3:6].copy()).float()
+        root_ang_vel = quat_apply_inverse(root_quat, root_ang_vel)
+        root_rpy = torch.stack(euler_xyz_from_quat(root_quat), dim=-1).view(-1)
+
         return {
-            'qpos': self.data.qpos.copy(),  # All joint positions (including root)
-            'qvel': self.data.qvel.copy(),  # All joint velocities (including root)
-            'qacc': self.data.qacc.copy(),  # All joint accelerations (including root)
-            'joint_pos': self.data.qpos[7:].copy(),  # Joint positions (excluding root)
-            'joint_vel': self.data.qvel[6:].copy(),  # Joint velocities (excluding root)
-            'joint_acc': self.data.qacc[6:].copy(),  # Joint accelerations (excluding root)
-            'root_pos': self.data.qpos[0:3].copy(),  # Root position (x, y, z)
-            'root_quat': self.data.qpos[3:7].copy(),  # Root orientation (quaternion)
-            'root_lin_vel': self.data.qvel[0:3].copy(),  # Root linear velocity
-            'root_ang_vel': self.data.qvel[3:6].copy(),  # Root angular velocity
-            'joint_names': self.joint_names
+            'joint_pos': torch.from_numpy(self.data.qpos[7:].copy()[self.joint_order]).float(),  # Joint positions (excluding root)
+            'joint_vel': torch.from_numpy(self.data.qvel[6:].copy()[self.joint_order]).float(),  # Joint velocities (excluding root)
+            'root_rpy': root_rpy,  # Root position (x, y, z)
+            'root_quat': root_quat,  # Root orientation (quaternion)
+            'root_ang_vel': root_ang_vel,  # Root angular velocity
         }
     
     def get_body_data(self):
@@ -174,11 +204,10 @@ class MujocoEnv:
             body_angular_velocities.append(vel[3:])  # Angular velocity
         
         return {
-            'body_pos': np.array(body_positions),
-            'body_quat': np.array(body_orientations),
-            'body_lin_vel': np.array(body_velocities),
-            'body_ang_vel': np.array(body_angular_velocities),
-            'body_names': [self.model.body(i).name for i in range(self.model.nbody)]
+            'body_pos': torch.from_numpy(np.array(body_positions)).float(),
+            'body_quat': torch.from_numpy(np.array(body_orientations)).float(),
+            'body_lin_vel': torch.from_numpy(np.array(body_velocities)).float(),
+            'body_ang_vel': torch.from_numpy(np.array(body_angular_velocities)).float(),
         }
     
     def set_pd_gains(self, kp=None, kd=None):
@@ -199,66 +228,69 @@ class MujocoEnv:
             if np.isscalar(kp):
                 self.kp = np.full(self.num_joints, kp)
             else:
-                kp = np.array(kp)
-                if len(kp) != self.num_joints:
+                if isinstance(kp, torch.Tensor):
+                    kp = kp.cpu().numpy()
+                elif isinstance(kp, list):
+                    kp = np.array(kp)
+                assert isinstance(kp, np.ndarray)
+                if len(kp) == self.num_joints:
+                    self.kp = kp.copy()
+                elif len(kp) == len(self.joint_order):
+                    self.kp[self.joint_order] = kp.copy()
+                    assert isinstance(self.joint_order_names, list)
+                    remain_joints = set(self.joint_names) - set(self.joint_order_names)
+                    print(f"Remaining joints for kpkd: {remain_joints}")
+                elif len(kp) == len(self.action_joints):
+                    self.kp[self.action_joints] = kp.copy()
+                    assert isinstance(self.action_joint_names, list)
+                    remain_joints = set(self.joint_names) - set(self.action_joint_names)
+                    print(f"Remaining joints for kpkd: {remain_joints}")
+                else:
                     raise ValueError(f"Expected kp array of length {self.num_joints}, got {len(kp)}")
-                self.kp = kp.copy()
         
         if kd is not None:
             if np.isscalar(kd):
                 self.kd = np.full(self.num_joints, kd)
             else:
-                kd = np.array(kd)
-                if len(kd) != self.num_joints:
+                if isinstance(kd, torch.Tensor):
+                    kd = kd.cpu().numpy()
+                elif isinstance(kd, list):
+                    kd = np.array(kd)
+                assert isinstance(kd, np.ndarray)
+                if len(kd) == self.num_joints:
+                    self.kd = kd.copy()
+                elif len(kd) == len(self.joint_order):
+                    self.kd[self.joint_order] = kd.copy()
+                elif len(kd) == len(self.action_joints):
+                    self.kd[self.action_joints] = kd.copy()
+                else:
                     raise ValueError(f"Expected kd array of length {self.num_joints}, got {len(kd)}")
-                self.kd = kd.copy()
         
         print(f"Set PD gains:")
         print(f"  kp: {self.kp}")
         print(f"  kd: {self.kd}")
     
-    def get_pd_gains(self):
+    def get_pd_gains(self, return_full=False):
         """
         Get current PD gains
         
         Returns:
             tuple: (kp_array, kd_array) current PD gains for all joints
         """
-        return self.kp.copy(), self.kd.copy()
-    
-    def set_target_positions(self, actions):
-        """
-        Set target positions for all joints (excluding root)
-        
-        Args:
-            actions: Array of target positions for joints
-        """
-        if len(actions) != self.num_joints:
-            raise ValueError(f"Expected actions array of length {self.num_joints}, got {len(actions)}")
-        
-        self.target_positions = np.array(actions).copy()
-    
-    def set_random_targets(self, range_min=-0.2, range_max=0.2):
-        """
-        Set random target positions
-        
-        Args:
-            range_min: Minimum value for random targets
-            range_max: Maximum value for random targets
-        """
-        self.target_positions = np.random.uniform(range_min, range_max, self.num_joints)
-        print(f"Set random target positions (range: {range_min} to {range_max})")
-    
-    def set_zero_targets(self):
-        """Set all target positions to zero"""
-        self.target_positions = np.zeros(self.num_joints)
-        print("Set zero target positions")
+        if return_full:
+            return torch.from_numpy(self.kp.copy()).float(), torch.from_numpy(self.kd.copy()).float()
+        else:
+            return torch.from_numpy(self.kp[self.joint_order].copy()).float(), torch.from_numpy(self.kd[self.joint_order].copy()).float()
     
     def apply_pd_control(self):
         """Apply PD control using current target positions"""
         # For position actuators, we just set the target positions
         # MuJoCo will automatically apply PD control
         self.data.ctrl[:] = self.target_positions
+
+    def step_complete(self):
+        """Check if the simulation step is complete"""
+        return True
     
     def step(self, actions=None):
         """
@@ -274,10 +306,14 @@ class MujocoEnv:
         start_time = time.time()
         # Update target positions if provided
         if actions is not None:
-            actions = np.array(actions)
-            if len(actions) != self.num_joints:
-                raise ValueError(f"Expected actions array of length {self.num_joints}, got {len(actions)}")
-            self.target_positions = actions.copy()
+            if isinstance(actions, torch.Tensor):
+                actions = actions.cpu().numpy()
+            elif isinstance(actions, list):
+                actions = np.array(actions)
+            assert isinstance(actions, np.ndarray)
+            if len(actions) != len(self.action_joints):
+                raise ValueError(f"Expected actions array of length {len(self.action_joints)}, got {len(actions)}")
+            self.target_positions[self.action_joints] = actions.copy()
         
         # Run decimation number of simulation steps
         for _ in range(self.decimation):
@@ -308,6 +344,22 @@ class MujocoEnv:
         if elapsed < control_period:
             time.sleep(control_period - elapsed)
         return True
+    
+    def _set_random_targets(self, range_min=-0.2, range_max=0.2):
+        """
+        Set random target positions
+        
+        Args:
+            range_min: Minimum value for random targets
+            range_max: Maximum value for random targets
+        """
+        self.target_positions = np.random.uniform(range_min, range_max, self.num_joints)
+        print(f"Set random target positions (range: {range_min} to {range_max})")
+    
+    def _set_zero_targets(self):
+        """Set all target positions to zero"""
+        self.target_positions = np.zeros(self.num_joints)
+        print("Set zero target positions")
     
     def run_simulation(self, max_steps=None):
         """
@@ -351,9 +403,9 @@ class MujocoEnv:
                                 print("  'p' - Set random target positions")
                                 print("  'z' - Set zero target positions")
                             elif user_input == 'p':
-                                self.set_random_targets()
+                                self._set_random_targets()
                             elif user_input == 'z':
-                                self.set_zero_targets()
+                                self._set_zero_targets()
                     except:
                         pass  # Ignore input errors
                 
