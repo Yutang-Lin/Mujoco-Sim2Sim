@@ -38,6 +38,7 @@ from unitree_hg.msg import (
     MotorCmd,
 )
 from .crc import CRC
+from .gamepad import Gamepad, parse_remote_data
 from .base_env import BaseEnv
 
 class UnitreeEnv(BaseEnv, Node):
@@ -147,6 +148,16 @@ class UnitreeEnv(BaseEnv, Node):
         # Initialize CRC
         self.crc = CRC()
 
+        # Initialize gamepad
+        self.gamepad = Gamepad()
+        self.gamepad_lstick = [0.0, 0.0]
+        self.gamepad_rstick = [0.0, 0.0]
+        self.gamepad_actions = ['gamepad.L1.pressed', 'gamepad.L2.pressed', 
+                                'gamepad.R1.pressed', 'gamepad.R2.pressed', 
+                                'gamepad.A.pressed', 'gamepad.B.pressed', 
+                                'gamepad.X.pressed', 'gamepad.Y.pressed',
+                                'gamepad.start.pressed', 'gamepad.select.pressed']
+
         # Initialize step frequency computation
         self.step_times = []
         self.max_record_steps = 50
@@ -178,6 +189,14 @@ class UnitreeEnv(BaseEnv, Node):
             self.lowcmd.mode_machine = msg.mode_machine
             motor_cmds = [x for x in msg.motor_state if x.mode == 1]
             assert len(motor_cmds) == self.num_joints, f"Expected {self.num_joints} motor commands, got {len(motor_cmds)}"
+
+        self.gamepad.update(parse_remote_data(msg.wireless_remote))
+        for action in self.gamepad_actions:
+            if eval('self.' + action):
+                for callback in self.input_callbacks[action]:
+                    callback()
+        self.gamepad_lstick = [self.gamepad.lx, self.gamepad.ly]
+        self.gamepad_rstick = [self.gamepad.rx, self.gamepad.ry]
 
         self.joint_pos[:] = torch.tensor([x.q for x in motor_cmds]).float()
         self.joint_vel[:] = torch.tensor([x.dq for x in motor_cmds]).float()

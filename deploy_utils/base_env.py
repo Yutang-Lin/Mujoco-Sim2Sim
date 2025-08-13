@@ -1,6 +1,10 @@
 import torch
 import numpy as np
 from typing import Callable
+import threading
+import sys
+import select
+import time
 
 def _noise_like(x: torch.Tensor, noise_type: str = 'uniform') -> torch.Tensor:
     if noise_type == 'uniform':
@@ -22,6 +26,7 @@ class BaseEnv:
                  align_tolerance: float = 2.0,
                  init_rclpy: bool = True,
                  spin_timeout: float = 0.001,
+                 launch_input_thread: bool = True,
 
                  # Simulation only
                  model_path: str = '', 
@@ -43,6 +48,17 @@ class BaseEnv:
         self.noise_level: float = noise_level
         self.noise_type: str = noise_type
         self.noise_scales: dict[str, float] = noise_scales
+        self.input_callbacks: dict[str, Callable] = {}
+        self.terminal_input_callbacks: list[Callable] = []
+        self.launch_input_thread: bool = launch_input_thread
+
+        # Launch input thread if enabled
+        if self.launch_input_thread:
+            print('[INFO]: Launching input thread, terminal input available')
+            self.input_thread = threading.Thread(target=self._input_thread)
+            self.input_thread.start()
+        else:
+            self.input_thread = None
 
     @staticmethod
     def data_interface(func: Callable) -> Callable:
@@ -61,6 +77,28 @@ class BaseEnv:
         wrapper.__repr__ = repr
         wrapper.__format__ = format
         return wrapper
+    
+    def register_input_callback(self, key: str, callback: Callable) -> None:
+        """Register a callback for a specific key"""
+        if key not in self.input_callbacks:
+            self.input_callbacks[key] = []
+        self.input_callbacks[key].append(callback)
+
+    def register_terminal_input_callback(self, callback: Callable) -> None:
+        """Register a callback for terminal input"""
+        self.terminal_input_callbacks.append(callback)
+
+    def _input_thread(self):
+        """Input thread"""
+        while True:
+            if select.select([sys.stdin], [], [], 0)[0]:
+                user_input = sys.stdin.readline().strip().lower()
+                if user_input in self.input_callbacks:
+                    for callback in self.input_callbacks[user_input]:
+                        callback()
+                for callback in self.terminal_input_callbacks:
+                    callback(user_input)
+            time.sleep(0.01)
 
     def reset(self, fix_root: bool = False) -> None:
         raise NotImplementedError("This function should be implemented by the subclass")

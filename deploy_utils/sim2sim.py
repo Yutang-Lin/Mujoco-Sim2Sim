@@ -29,6 +29,8 @@ from .math_utils import (
     quat_apply_inverse,
 )
 from .base_env import BaseEnv
+import select
+import threading
 
 class MujocoEnv(BaseEnv):
     simulated = True
@@ -95,13 +97,15 @@ class MujocoEnv(BaseEnv):
         # Calculate decimation (how many simulation steps per control step)
         self.decimation = int(simulation_freq / control_freq)
         
-        # Load model and data
+        # Load model
         self.model = mujoco.MjModel.from_xml_path(model_path) # type: ignore
-        self.data = mujoco.MjData(self.model) # type: ignore
-        
         # Setup simulation
         self._setup_joint_armature()
         self._setup_joint_damping(joint_damping)
+        # Initialize data
+        self.data = mujoco.MjData(self.model) # type: ignore
+        
+        # Setup simulation frequency
         self._setup_simulation_frequency()
         
         # Initialize viewer if enabled
@@ -156,6 +160,13 @@ class MujocoEnv(BaseEnv):
         else:
             for name in action_joint_names:
                 self.action_joints.append(self.joint_names.index(name))
+
+        self.register_input_callback('r', self.reset)
+        self.register_input_callback('rf', self.reset)
+        self.register_input_callback('q', self.close)
+        self.register_input_callback('h', self.show_help)
+        self.register_input_callback('p', self._set_random_targets)
+        self.register_input_callback('z', self._set_zero_targets)
         
         print(f"MuJoCo Environment initialized:")
         print(f"  Model: {model_path}")
@@ -342,15 +353,16 @@ class MujocoEnv(BaseEnv):
                 assert isinstance(kd, np.ndarray)
                 if len(kd) == self.num_joints:
                     self.kd = kd.copy()
-                elif len(kd) == len(self.joint_order):
-                    self.kd[self.joint_order] = kd.copy()
                 elif len(kd) == len(self.action_joints):
                     self.kd[self.action_joints] = kd.copy()
+                elif len(kd) == len(self.joint_order):
+                    self.kd[self.joint_order] = kd.copy()
                 else:
                     raise ValueError(f"Expected kd array of length {self.num_joints}, got {len(kd)}")
         
         # Update MuJoCo model actuator gains if using position actuators
-        self._update_model_actuator_gains()
+        # NOTE: wrong function call
+        # self._update_model_actuator_gains()
         
         print(f"Set PD gains:")
         print(f"  kp: {self.kp}")
@@ -431,6 +443,9 @@ class MujocoEnv(BaseEnv):
             if self.root_fixed:
                 self.data.qpos[0:7] = self.model.qpos0[0:7]  # Keep root position and orientation fixed
                 self.data.qvel[0:6] = 0.0  # Keep root velocity at zero
+
+            # Forward model
+            mujoco.mj_forward(self.model, self.data) # type: ignore
             
             # Apply PD control
             self.apply_pd_control()
@@ -444,6 +459,7 @@ class MujocoEnv(BaseEnv):
             # Step simulation
             mujoco.mj_step(self.model, self.data) # type: ignore
             
+            # self.viewer.sync()
             # Sync viewer if enabled (only on the last step to avoid excessive syncing)
             if self.viewer is not None and _ == self.decimation - 1:
                 self.viewer.sync()
@@ -487,6 +503,14 @@ class MujocoEnv(BaseEnv):
         """Set all target positions to zero"""
         self.target_positions = np.zeros(self.num_joints)
         print("Set zero target positions")
+
+    def show_help(self):
+        """Show help"""
+        print("Commands:")
+        print("  'r' - Reset robot with free root")
+        print("  'rf' - Reset robot with fixed root (floating)") 
+        print("  'q' - Quit simulation")
+        print("  'h' - Show this help")
     
     def run_simulation(self, max_steps=None):
         """
@@ -504,38 +528,18 @@ class MujocoEnv(BaseEnv):
         print("  'p' - Set random target positions")
         print("  'z' - Set zero target positions")
         print("\nNote: You can type commands in the terminal while simulation is running.")
+
+        def show_help():
+            print("Commands:")
+            print("  'r' - Reset robot with free root")
+            print("  'rf' - Reset robot with fixed root (floating)") 
+            print("  'q' - Quit simulation")
+            print("  'h' - Show this help")
+            print("  'p' - Set random target positions")
+            print("  'z' - Set zero target positions")
         
         try:
             while (self.viewer is None or self.viewer.is_running()) and (max_steps is None or self.step_count < max_steps):
-                # Check for input every 100 steps (roughly every 0.1 seconds at 1kHz)
-                if self.step_count % 100 == 0:
-                    try:
-                        # Use a non-blocking input check
-                        import select
-                        if select.select([sys.stdin], [], [], 0)[0]:
-                            user_input = sys.stdin.readline().strip().lower()
-                            if user_input == 'r':
-                                self.reset(fix_root=False)
-                            elif user_input == 'rf':
-                                self.reset(fix_root=True)
-                            elif user_input == 'q':
-                                print("Quitting simulation...")
-                                break
-                            elif user_input == 'h':
-                                print("Commands:")
-                                print("  'r' - Reset robot with free root")
-                                print("  'rf' - Reset robot with fixed root (floating)") 
-                                print("  'q' - Quit simulation")
-                                print("  'h' - Show this help")
-                                print("  'p' - Set random target positions")
-                                print("  'z' - Set zero target positions")
-                            elif user_input == 'p':
-                                self._set_random_targets()
-                            elif user_input == 'z':
-                                self._set_zero_targets()
-                    except:
-                        pass  # Ignore input errors
-                
                 # Step simulation
                 if not self.step():
                     break
